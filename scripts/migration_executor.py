@@ -128,7 +128,7 @@ class MigrationExecutor:
                         logger.error(f"执行语句失败：{e}")
                         conn.rollback()
                         result.error = f"SQL 执行错误：{str(e)}"
-                        self._log_failure(request_id, sql, str(e), cursor)
+                        self._log_failure(request_id, sql, str(e), cursor, conn)
                         cursor.close()
                         conn.close()
                         return result
@@ -139,7 +139,8 @@ class MigrationExecutor:
             # 记录成功日志
             self._log_success(
                 request_id, sql, cursor, 
-                rollback_sql='\n'.join(rollback_statements) if rollback_statements else None
+                rollback_sql='\n'.join(rollback_statements) if rollback_statements else None,
+                conn=conn
             )
             
             result.success = True
@@ -240,7 +241,7 @@ class MigrationExecutor:
             CREATE TABLE IF NOT EXISTS {self.migration_log_table} (
                 id BIGINT AUTO_INCREMENT PRIMARY KEY,
                 request_id VARCHAR(64) NOT NULL,
-                sql TEXT NOT NULL,
+                `sql` TEXT NOT NULL,
                 rollback_sql TEXT,
                 executed_at DATETIME NOT NULL,
                 executed_by VARCHAR(128),
@@ -327,24 +328,26 @@ class MigrationExecutor:
         
         return None
     
-    def _log_success(self, request_id: str, sql: str, cursor, rollback_sql: Optional[str] = None):
+    def _log_success(self, request_id: str, sql: str, cursor, rollback_sql: Optional[str] = None, conn=None):
         """记录成功日志"""
         cursor.execute(f"""
             INSERT INTO {self.migration_log_table} 
-            (request_id, sql, rollback_sql, executed_at, executed_by, status, affected_rows)
+            (request_id, `sql`, rollback_sql, executed_at, executed_by, status, affected_rows)
             VALUES (%s, %s, %s, %s, %s, 'success', %s)
         """, (
             request_id, sql, rollback_sql, 
             datetime.now().isoformat(),
             os.getenv('USER', 'unknown'),
-            cursor.rowcount
+            0
         ))
+        if conn:
+            conn.commit()
     
-    def _log_failure(self, request_id: str, sql: str, error: str, cursor):
+    def _log_failure(self, request_id: str, sql: str, error: str, cursor, conn=None):
         """记录失败日志"""
         cursor.execute(f"""
             INSERT INTO {self.migration_log_table} 
-            (request_id, sql, executed_at, executed_by, status, error)
+            (request_id, `sql`, executed_at, executed_by, status, error)
             VALUES (%s, %s, %s, %s, 'failed', %s)
         """, (
             request_id, sql, 
@@ -352,6 +355,8 @@ class MigrationExecutor:
             os.getenv('USER', 'unknown'),
             error
         ))
+        if conn:
+            conn.commit()
     
     def get_migration_history(self, limit: int = 50) -> List[Dict]:
         """
