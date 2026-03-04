@@ -5,7 +5,7 @@
 | 测试类型 | 状态 | 通过率 | 日期 |
 |---------|------|--------|------|
 | 单元测试 | ✅ 通过 | 7/7 (100%) | 2026-03-04 |
-| 集成测试 | ⚠️ 跳过 | - | - |
+| 集成测试 | ✅ 通过 | 5/5 (100%) | 2026-03-05 |
 | 压力测试 | ⚠️ 待执行 | - | - |
 
 ---
@@ -60,48 +60,71 @@
 
 ---
 
-## 集成测试状态
+## 集成测试结果
 
-### 受阻原因
+### 测试环境
 
-Docker 镜像拉取问题：
-- MySQL 8.0 镜像拉取超时
-- 可能原因：网络连接问题、Docker Hub 访问限制
+- **数据库**: MySQL 8.0 (Docker)
+- **连接**: localhost:3306
+- **代理配置**: HTTP/HTTPS 代理 (127.0.0.1:7897)
 
-### 已尝试方案
+### 测试用例
 
-1. ❌ 官方源：`docker pull mysql:8.0` - 卡住
-2. ❌ 阿里云镜像源：`registry.cn-hangzhou.aliyuncs.com/library/mysql:8.0` - 卡住
-3. ❌ 指定平台：`--platform linux/amd64` - 卡住
-
-### 建议解决方案
-
-**方案 A: 手动拉取镜像**
-```bash
-# 在本地终端执行
-docker pull mysql:8.0
-
-# 然后重新运行测试
-cd ~/.openclaw/workspace-dev/database-release-system
-docker compose -f docker-compose.test.yml up -d
+**集成测试 1: 创建表**
+```python
+✅ 通过
+验证：成功创建表并记录迁移日志
 ```
 
-**方案 B: 使用现有数据库**
-```bash
-# 修改测试配置，使用现有 MySQL 实例
-export DB_HOST=your-db-host
-export DB_USER=test_user
-export DB_PASSWORD=your-password
-export DB_NAME=test_db
-
-# 运行集成测试
-python3 test/test_all.py
+**集成测试 2: 迁移历史查询**
+```python
+✅ 通过
+验证：正确查询 schema_migrations 表中的记录
 ```
 
-**方案 C: 使用 SQLite 替代（快速验证）**
-```bash
-# 修改迁移执行器使用 SQLite 进行集成测试
-# 无需 Docker，可立即执行
+**集成测试 3: Schema 对比**
+```python
+✅ 通过
+验证：正确对比当前与目标 Schema，生成变更计划
+```
+
+**集成测试 4: 审批流程**
+```python
+✅ 通过
+验证：多级审批流程正常工作（组长 → DBA）
+```
+
+**集成测试 5: 完整工作流**
+```python
+✅ 通过
+验证：从 Schema 对比到执行变更的完整流程
+```
+
+### 已修复问题
+
+**Bug #2: MySQL 保留字冲突**
+- 问题：`sql` 字段为 MySQL 保留字，导致 INSERT 失败
+- 修复：使用反引号包裹字段名 `` `sql` ``
+
+**Bug #3: 事务提交缺失**
+- 问题：日志 INSERT 后未调用 conn.commit()
+- 修复：在 _log_success 和 _log_failure 中添加 conn 参数并提交
+
+### 代理配置方法
+
+成功拉取 MySQL 镜像的代理配置：
+
+```json
+// ~/.docker/config.json
+{
+  "proxies": {
+    "default": {
+      "httpProxy": "http://127.0.0.1:7897",
+      "httpsProxy": "http://127.0.0.1:7897",
+      "noProxy": "localhost,127.0.0.1"
+    }
+  }
+}
 ```
 
 ---
