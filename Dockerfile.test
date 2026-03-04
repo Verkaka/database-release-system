@@ -1,0 +1,19 @@
+# 测试 Dockerfile
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# 安装依赖
+RUN pip install --no-cache-dir \
+    mysql-connector-python \
+    pyyaml \
+    pytest \
+    pytest-cov
+
+# 复制代码
+COPY scripts/ /app/scripts/
+COPY workflows/ /app/workflows/
+COPY test/ /app/test/
+
+# 运行测试
+CMD ["pytest", "-v", "--cov=/app", "/app/test"]

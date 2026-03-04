@@ -121,9 +121,13 @@ class ApprovalWorkflow:
             True 需要 DBA 审批
         """
         for change in changes:
-            risk = change.get('risk', 'low')
-            if risk in self.dba_required_risks:
-                return True
+            if isinstance(change, dict):
+                risk = change.get('risk', 'low')
+                if risk in self.dba_required_risks:
+                    return True
+            elif isinstance(change, str):
+                # 字符串类型的变更，默认低危
+                pass
         return False
     
     def get_required_approvals(self, request: ApprovalRequest) -> Set[str]:

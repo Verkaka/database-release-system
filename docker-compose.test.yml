@@ -1,0 +1,53 @@
+version: '3.8'
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: db-release-test
+    environment:
+      MYSQL_ROOT_PASSWORD: test_root_password
+      MYSQL_DATABASE: test_db
+      MYSQL_USER: test_user
+      MYSQL_PASSWORD: test_password
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./test/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-ptest_root_password"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 30s
+    networks:
+      - test_network
+
+  # 测试容器 - 运行自动化测试
+  test-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    container_name: db-release-test-runner
+    environment:
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_USER: test_user
+      DB_PASSWORD: test_password
+      DB_NAME: test_db
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - test_network
+    volumes:
+      - ./test:/app/test
+      - ./scripts:/app/scripts
+      - ./workflows:/app/workflows
+
+volumes:
+  mysql_data:
+
+networks:
+  test_network:
+    driver: bridge
