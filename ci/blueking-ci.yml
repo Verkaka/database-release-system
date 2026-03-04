@@ -1,0 +1,232 @@
+# blueking-ci.yml - 蓝鲸 CI 流水线配置
+# 企业级数据库声明式发布流程
+
+version: 1.0
+
+pipeline:
+  name: database-schema-pipeline
+  description: 数据库 Schema 声明式发布流水线
+  triggers:
+    - type: git_push
+      branch: main
+      path: 
+        - "schema/**/*.yaml"
+        - "schema/**/*.yml"
+        - "schema/**/*.sql"
+    
+    - type: manual
+      description: 手动触发发布流程
+
+  variables:
+    DB_HOST_STAGING: "${env.DB_HOST_STAGING}"
+    DB_HOST_PROD: "${env.DB_HOST_PROD}"
+    DB_USER: "${env.DB_USER}"
+    SCHEMA_DIR: "./schema"
+
+  stages:
+    # ========== 阶段 1: Schema 验证 ==========
+    - name: schema_validate
+      description: 验证 Schema 文件格式和语法
+      type: script
+      script: |
+        echo "=== Schema 验证开始 ==="
+        python3 scripts/validate_schema.py --dir ${SCHEMA_DIR}
+        
+        if [ $? -ne 0 ]; then
+          echo "❌ Schema 验证失败"
+          exit 1
+        fi
+        echo "✅ Schema 验证通过"
+    
+    # ========== 阶段 2: 生成变更计划 ==========
+    - name: generate_diff
+      description: 对比当前与目标状态，生成变更计划
+      type: script
+      script: |
+        echo "=== 生成变更计划 ==="
+        
+        # 获取当前环境 Schema
+        python3 scripts/fetch_current_schema.py \
+          --env ${CI_ENVIRONMENT:-staging} \
+          --output current_schema.json
+        
+        # 加载目标 Schema
+        python3 scripts/load_target_schema.py \
+          --dir ${SCHEMA_DIR}/${CI_ENVIRONMENT:-staging} \
+          --output target_schema.json
+        
+        # 执行对比
+        python3 scripts/schema_diff.py \
+          --current current_schema.json \
+          --target target_schema.json \
+          --output changes.json
+        
+        echo "变更计划生成完成:"
+        cat changes.json | python3 -m json.tool
+    
+    # ========== 阶段 3: 风险评估 ==========
+    - name: risk_assessment
+      description: 评估变更风险等级
+      type: script
+      script: |
+        echo "=== 风险评估 ==="
+        
+        python3 scripts/risk_check.py \
+          --input changes.json \
+          --output risk_report.json
+        
+        # 检查是否有高危变更
+        HIGH_RISK_COUNT=$(python3 -c "import json; print(json.load(open('risk_report.json'))['high_risk_count'])")
+        
+        if [ "$HIGH_RISK_COUNT" -gt 0 ]; then
+          echo "⚠️  发现 $HIGH_RISK_COUNT 项高危变更，需要 DBA 审批"
+          echo "HIGH_RISK=true" >> ${CI_WORKSPACE}/.env
+        else
+          echo "✅ 无高危变更"
+          echo "HIGH_RISK=false" >> ${CI_WORKSPACE}/.env
+        fi
+    
+    # ========== 阶段 4: 创建审批请求 ==========
+    - name: create_approval
+      description: 创建审批请求
+      type: api_call
+      api: /api/v1/approval/create
+      method: POST
+      headers:
+        Content-Type: application/json
+        Authorization: "Bearer ${APPROVAL_API_TOKEN}"
+      body:
+        submitter: "${GIT_COMMIT_AUTHOR}"
+        submitter_name: "${GIT_COMMIT_AUTHOR_NAME}"
+        commit_id: "${GIT_COMMIT_SHA}"
+        changes: "${file:changes.json}"
+        risk_report: "${file:risk_report.json}"
+        environment: "${CI_ENVIRONMENT:-staging}"
+      output_variable: APPROVAL_REQUEST_ID
+    
+    # ========== 阶段 5: 等待审批 ==========
+    - name: wait_approval
+      description: 等待审批完成
+      type: manual_gate
+      timeout: 72h
+      timeout_action: reject
+      approvers:
+        - role: team_lead
+          required: true
+          description: "技术负责人审批"
+        - role: dba
+          required: conditional
+          condition: "${HIGH_RISK}"
+          description: "DBA 审批（高危变更必需）"
+      notify:
+        on_create:
+          - role: team_lead
+          - role: dba
+        on_timeout:
+          - submitter
+    
+    # ========== 阶段 6: 生成迁移脚本 ==========
+    - name: generate_migration
+      description: 生成可执行迁移脚本
+      type: script
+      script: |
+        echo "=== 生成迁移脚本 ==="
+        
+        python3 scripts/generate_migration.py \
+          --input changes.json \
+          --output migration.sql \
+          --with-rollback
+        
+        echo "迁移脚本生成完成:"
+        cat migration.sql
+    
+    # ========== 阶段 7: 预演环境测试 ==========
+    - name: dry_run
+      description: 在预演环境执行干跑测试
+      type: script
+      script: |
+        echo "=== 干跑测试 ==="
+        
+        python3 scripts/execute_migration.py \
+          --input migration.sql \
+          --host ${DB_HOST_STAGING} \
+          --user ${DB_USER} \
+          --dry-run \
+          --output dry_run_result.json
+        
+        if [ "$(python3 -c "import json; print(json.load(open('dry_run_result.json'))['success'])")" != "True" ]; then
+          echo "❌ 干跑测试失败"
+          cat dry_run_result.json
+          exit 1
+        fi
+        echo "✅ 干跑测试通过"
+    
+    # ========== 阶段 8: 部署到测试环境 ==========
+    - name: deploy_staging
+      description: 部署到测试环境
+      type: script
+      condition: "${CI_ENVIRONMENT} != production"
+      script: |
+        echo "=== 部署到测试环境 ==="
+        
+        python3 scripts/execute_migration.py \
+          --input migration.sql \
+          --host ${DB_HOST_STAGING} \
+          --user ${DB_USER} \
+          --output deploy_result.json
+        
+        if [ "$(python3 -c "import json; print(json.load(open('deploy_result.json'))['success'])")" != "True" ]; then
+          echo "❌ 测试环境部署失败"
+          cat deploy_result.json
+          exit 1
+        fi
+        echo "✅ 测试环境部署成功"
+    
+    # ========== 阶段 9: 生产环境手动执行 ==========
+    - name: manual_production
+      description: 运维手动执行生产环境变更
+      type: manual_gate
+      condition: "${CI_ENVIRONMENT} == production"
+      approvers:
+        - role: ops
+          required: true
+          description: "运维执行生产变更"
+      script: |
+        echo "=== 生产环境执行 ==="
+        echo "请运维人员下载 migration.sql 并在生产环境执行"
+        echo ""
+        echo "执行命令:"
+        echo "  mysql -h ${DB_HOST_PROD} -u ${DB_USER} -p < migration.sql"
+        echo ""
+        echo "执行后请确认并更新审批状态"
+
+  notifications:
+    on_success:
+      - type: webhook
+        url: "${NOTIFY_WEBHOOK}"
+        body:
+          event: "pipeline_success"
+          pipeline: "${pipeline.name}"
+          request_id: "${APPROVAL_REQUEST_ID}"
+    
+    on_failure:
+      - type: webhook
+        url: "${NOTIFY_WEBHOOK}"
+        body:
+          event: "pipeline_failure"
+          pipeline: "${pipeline.name}"
+          stage: "${failed_stage}"
+          request_id: "${APPROVAL_REQUEST_ID}"
+
+  artifacts:
+    - name: changes.json
+      path: changes.json
+      expire: 7d
+    
+    - name: migration.sql
+      path: migration.sql
+      expire: 30d
+    
+    - name: risk_report.json
+      path: risk_report.json
+      expire: 7d

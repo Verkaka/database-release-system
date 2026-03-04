@@ -1,0 +1,98 @@
+# 生产环境 - 用户表 Schema
+# 声明式数据库定义文件
+
+version: "1.0"
+database: production_db
+environment: prod
+
+tables:
+  - name: users
+    description: 用户基础信息表
+    columns:
+      - name: id
+        type: BIGINT UNSIGNED
+        primary_key: true
+        auto_increment: true
+        comment: "用户 ID"
+      
+      - name: email
+        type: VARCHAR(255)
+        not_null: true
+        unique: true
+        comment: "邮箱地址"
+      
+      - name: username
+        type: VARCHAR(64)
+        not_null: true
+        unique: true
+        comment: "用户名"
+      
+      - name: password_hash
+        type: VARCHAR(255)
+        not_null: true
+        comment: "密码哈希"
+      
+      - name: status
+        type: TINYINT
+        not_null: true
+        default: 1
+        comment: "状态：0-禁用，1-启用"
+      
+      - name: created_at
+        type: TIMESTAMP
+        not_null: true
+        default: CURRENT_TIMESTAMP
+        comment: "创建时间"
+      
+      - name: updated_at
+        type: TIMESTAMP
+        not_null: true
+        default: CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        comment: "更新时间"
+    
+    indexes:
+      - name: idx_email
+        columns: [email]
+        type: UNIQUE
+        comment: "邮箱索引"
+      
+      - name: idx_username
+        columns: [username]
+        type: UNIQUE
+        comment: "用户名索引"
+      
+      - name: idx_status
+        columns: [status]
+        comment: "状态索引"
+
+  - name: user_profiles
+    description: 用户扩展信息表
+    columns:
+      - name: id
+        type: BIGINT UNSIGNED
+        primary_key: true
+        auto_increment: true
+      
+      - name: user_id
+        type: BIGINT UNSIGNED
+        not_null: true
+        comment: "关联用户 ID"
+      
+      - name: avatar_url
+        type: VARCHAR(512)
+        comment: "头像 URL"
+      
+      - name: bio
+        type: TEXT
+        comment: "个人简介"
+      
+      - name: created_at
+        type: TIMESTAMP
+        not_null: true
+        default: CURRENT_TIMESTAMP
+    
+    indexes:
+      - name: idx_user_id
+        columns: [user_id]
+        type: UNIQUE
+        comment: "用户 ID 唯一索引"
